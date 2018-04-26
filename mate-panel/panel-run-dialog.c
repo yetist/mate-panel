@@ -755,13 +755,28 @@ static int
 compare_applications (MateMenuTreeEntry *a,
 		      MateMenuTreeEntry *b)
 {
-	return g_utf8_collate (matemenu_tree_entry_get_display_name (a),
-			       matemenu_tree_entry_get_display_name (b));
+	GDesktopAppInfo    *infoa, *infob;
+	char *namea, *nameb;
+	gint compare;
+
+	infoa = matemenu_tree_entry_get_app_info (a);
+	infob = matemenu_tree_entry_get_app_info (a);
+	namea =  g_desktop_app_info_get_locale_string (infoa, "Name");
+	nameb =  g_desktop_app_info_get_locale_string (infob, "Name");
+
+       	compare = g_utf8_collate (namea, nameb);
+
+	g_free(namea);
+	g_free(nameb);
+	g_object_unref(infoa);
+	g_object_unref(infob);
+	return compare;
 }
 
 static GSList *get_all_applications_from_dir (MateMenuTreeDirectory *directory,
 					      GSList            *list);
 
+#if 0
 static GSList *
 get_all_applications_from_alias (MateMenuTreeAlias *alias,
 				 GSList         *list)
@@ -788,39 +803,62 @@ get_all_applications_from_alias (MateMenuTreeAlias *alias,
 
 	return list;
 }
+#endif
 
 static GSList *
 get_all_applications_from_dir (MateMenuTreeDirectory *directory,
 			       GSList             *list)
 {
+	MateMenuTreeIter *iter;
 	GSList *items;
 	GSList *l;
 
-	items = matemenu_tree_directory_get_contents (directory);
+	iter = matemenu_tree_directory_iter (directory);
+	while (TRUE) {
+		gpointer item;
+		switch (matemenu_tree_iter_next (iter)) {
+			case MATEMENU_TREE_ITEM_INVALID:
+				goto done;
 
-	for (l = items; l; l = l->next) {
-		switch (matemenu_tree_item_get_type (l->data)) {
-		case MATEMENU_TREE_ITEM_ENTRY:
-			list = g_slist_append (list, matemenu_tree_item_ref (l->data));
-			break;
+			case MATEMENU_TREE_ITEM_ENTRY:
+				item = matemenu_tree_iter_get_entry (iter);
+				list = g_slist_append (list, (MateMenuTreeEntry*) item);
+				break;
 
-		case MATEMENU_TREE_ITEM_DIRECTORY:
-			list = get_all_applications_from_dir (l->data, list);
-			break;
+			case MATEMENU_TREE_ITEM_DIRECTORY:
+				item = matemenu_tree_iter_get_directory (iter);
+				list = get_all_applications_from_dir ((MateMenuTreeDirectory*)item, list);
+				break;
 
-		case MATEMENU_TREE_ITEM_ALIAS:
-			list = get_all_applications_from_alias (l->data, list);
-			break;
+			case MATEMENU_TREE_ITEM_HEADER:
+			case MATEMENU_TREE_ITEM_SEPARATOR:
+				item = NULL;
+				break;
 
-		default:
-			break;
+			case MATEMENU_TREE_ITEM_ALIAS:
+				{
+					item = matemenu_tree_iter_get_alias (iter);
+
+					if (matemenu_tree_alias_get_aliased_item_type (item) == MATEMENU_TREE_ITEM_ENTRY)
+					{
+						MateMenuTreeEntry *entry = matemenu_tree_alias_get_aliased_entry (item);
+						list = g_slist_append (list, (MateMenuTreeEntry*) entry);
+						matemenu_tree_item_unref (entry);
+					}
+				}
+				break;
+
+			default:
+				g_assert_not_reached ();
+				break;
 		}
 
-		matemenu_tree_item_unref (l->data);
+		matemenu_tree_item_unref (item);
+		continue;
+done:
+		break;
 	}
-
-	g_slist_free (items);
-
+	matemenu_tree_iter_unref (iter);
 	return list;
 }
 
@@ -828,17 +866,25 @@ static GSList* get_all_applications(void)
 {
 	MateMenuTree* tree;
 	MateMenuTreeDirectory* root;
+	GError        *error = NULL;
 	GSList* retval;
 
-	tree = matemenu_tree_lookup("mate-applications.menu", MATEMENU_TREE_FLAGS_NONE);
-	matemenu_tree_set_sort_key(tree, MATEMENU_TREE_SORT_DISPLAY_NAME);
+  	tree = matemenu_tree_new ("mate-applications.menu", MATEMENU_TREE_FLAGS_NONE);
+	if (!matemenu_tree_load_sync (tree, &error)) {
+		g_printerr ("Failed to load tree: %s\n", error->message);
+		return NULL;
+	}
 
-	root = matemenu_tree_get_root_directory(tree);
+	g_print ("Loaded menu from %s\n", matemenu_tree_get_canonical_menu_path (tree));
+	root = matemenu_tree_get_root_directory (tree);
+	if (root == NULL){
+	       	return NULL;
+	}
 
 	retval = get_all_applications_from_dir(root, NULL);
 
 	matemenu_tree_item_unref(root);
-	matemenu_tree_unref(tree);
+	g_object_unref(tree);
 
 	retval = g_slist_sort(retval, (GCompareFunc) compare_applications);
 
@@ -874,8 +920,10 @@ panel_run_dialog_add_items_idle (PanelRunDialog *dialog)
 		const char     *entry_name;
 
 		next = l->next;
+		GDesktopAppInfo *ginfo;
+		ginfo = matemenu_tree_entry_get_app_info (entry);
 
-		entry_name = matemenu_tree_entry_get_display_name (entry);
+		entry_name = g_app_info_get_display_name(G_APP_INFO(ginfo));
 		if (prev_name && entry_name && strcmp (entry_name, prev_name) == 0) {
 			matemenu_tree_item_unref (entry);
 
@@ -888,15 +936,17 @@ panel_run_dialog_add_items_idle (PanelRunDialog *dialog)
 	for (l = all_applications; l; l = l->next) {
 		MateMenuTreeEntry *entry = l->data;
 		GtkTreeIter    iter;
-		const gchar *icon = matemenu_tree_entry_get_icon (entry);
-		GIcon *gicon = panel_gicon_from_icon_name (icon);
+		GDesktopAppInfo *ginfo;
+
+		ginfo = matemenu_tree_entry_get_app_info (entry);
+		GIcon *gicon = g_app_info_get_icon(G_APP_INFO(ginfo));
 
 		gtk_list_store_append (dialog->program_list_store, &iter);
 		gtk_list_store_set (dialog->program_list_store, &iter,
 				    COLUMN_GICON,     gicon,
-				    COLUMN_NAME,      matemenu_tree_entry_get_display_name (entry),
-				    COLUMN_COMMENT,   matemenu_tree_entry_get_comment (entry),
-				    COLUMN_EXEC,      matemenu_tree_entry_get_exec (entry),
+				    COLUMN_NAME,      g_app_info_get_display_name(G_APP_INFO(ginfo)),
+				    COLUMN_COMMENT,   g_app_info_get_description(G_APP_INFO(ginfo)),
+				    COLUMN_EXEC,      g_app_info_get_commandline(G_APP_INFO(ginfo)),
 				    COLUMN_PATH,      matemenu_tree_entry_get_desktop_file_path (entry),
 				    COLUMN_VISIBLE,   TRUE,
 				    -1);

@@ -265,13 +265,9 @@ static void
 add_drawers_from_alias (MateMenuTreeAlias *alias,
 			const char     *toplevel_id)
 {
-	MateMenuTreeItem *aliased_item;
-
-	aliased_item = matemenu_tree_alias_get_item (alias);
-
-	switch (matemenu_tree_item_get_type (aliased_item)) {
+	switch (matemenu_tree_alias_get_aliased_item_type (alias)) {
 	case MATEMENU_TREE_ITEM_DIRECTORY:
-		add_drawers_from_dir (MATEMENU_TREE_DIRECTORY (aliased_item),
+		add_drawers_from_dir (matemenu_tree_alias_get_directory (alias),
 				      G_MAXINT/2,
 				      toplevel_id);
 		break;
@@ -279,14 +275,12 @@ add_drawers_from_alias (MateMenuTreeAlias *alias,
 	case MATEMENU_TREE_ITEM_ENTRY:
 		panel_launcher_create_with_id (toplevel_id,
 					       G_MAXINT/2,
-					       matemenu_tree_entry_get_desktop_file_path (MATEMENU_TREE_ENTRY (aliased_item)));
+					       matemenu_tree_entry_get_desktop_file_path (matemenu_tree_alias_get_aliased_entry (alias)));
 		break;
 
 	default:
 		break;
 	}
-
-	matemenu_tree_item_unref (aliased_item);
 }
 
 static void
@@ -295,9 +289,7 @@ add_drawers_from_dir (MateMenuTreeDirectory *directory,
 		      const char         *toplevel_id)
 {
 	const char *name;
-	const char *icon;
-	GSList     *items;
-	GSList     *l;
+	GIcon *icon;
 	char       *attached_toplevel_id;
 
 	name = matemenu_tree_directory_get_name (directory);
@@ -311,36 +303,50 @@ add_drawers_from_dir (MateMenuTreeDirectory *directory,
 	if (!attached_toplevel_id)
 		return;
 
-	items = matemenu_tree_directory_get_contents (directory);
-	for (l = items; l; l = l->next) {
-		MateMenuTreeItem *item = l->data;
+	MateMenuTreeIter *iter;
+	iter = matemenu_tree_directory_iter (directory);
+	while (TRUE) {
+		gpointer item;
+		switch (matemenu_tree_iter_next (iter)) {
+			case MATEMENU_TREE_ITEM_INVALID:
+				goto done;
 
-		switch (matemenu_tree_item_get_type (item)) {
-		case MATEMENU_TREE_ITEM_ENTRY:
-			panel_launcher_create_with_id (attached_toplevel_id,
-						       G_MAXINT/2,
-						       matemenu_tree_entry_get_desktop_file_path (MATEMENU_TREE_ENTRY (item)));
-			break;
+			case MATEMENU_TREE_ITEM_ENTRY:
+				item = matemenu_tree_iter_get_entry (iter);
+				panel_launcher_create_with_id (attached_toplevel_id,
+						G_MAXINT/2,
+						matemenu_tree_entry_get_desktop_file_path (item));
+				break;
 
-		case MATEMENU_TREE_ITEM_DIRECTORY:
-			add_drawers_from_dir (MATEMENU_TREE_DIRECTORY (item),
-					      G_MAXINT/2,
-					      attached_toplevel_id);
-			break;
+			case MATEMENU_TREE_ITEM_DIRECTORY:
+				item = matemenu_tree_iter_get_directory (iter);
+				add_drawers_from_dir (item,
+						G_MAXINT/2,
+						attached_toplevel_id);
+				break;
 
-		case MATEMENU_TREE_ITEM_ALIAS:
-			add_drawers_from_alias (MATEMENU_TREE_ALIAS (item), attached_toplevel_id);
-			break;
+			case MATEMENU_TREE_ITEM_HEADER:
+			case MATEMENU_TREE_ITEM_SEPARATOR:
+				item = NULL;
+				break;
 
-		default:
-			break;
+			case MATEMENU_TREE_ITEM_ALIAS:
+				{
+					item = matemenu_tree_iter_get_alias (iter);
+					add_drawers_from_alias (item, attached_toplevel_id);
+				}
+				break;
+
+			default:
+				g_assert_not_reached ();
+				break;
 		}
 
 		matemenu_tree_item_unref (item);
+		continue;
+done:
+		break;
 	}
-
-	g_slist_free (items);
-
 	g_free (attached_toplevel_id);
 }
 
@@ -354,7 +360,7 @@ add_menudrawer_to_panel (GtkWidget      *menuitem,
 	PanelData         *pd;
 	int                insertion_pos;
 
-	directory = matemenu_tree_item_get_parent (MATEMENU_TREE_ITEM (entry));
+	directory = matemenu_tree_entry_get_parent (entry);
 
 	panel = menu_get_panel (menuitem);
 
@@ -380,7 +386,7 @@ add_menu_to_panel (GtkWidget      *menuitem,
 	char               *menu_path;
 	const char         *menu_filename;
 
-	directory = matemenu_tree_item_get_parent (MATEMENU_TREE_ITEM (entry));
+	directory = matemenu_tree_entry_get_parent (entry);
 	if (!directory) {
 		g_warning ("Cannot find the filename for the menu: no directory");
 		return;
@@ -393,8 +399,8 @@ add_menu_to_panel (GtkWidget      *menuitem,
 		return;
 	}
 
-	menu_filename = matemenu_tree_get_menu_file (tree);
-	matemenu_tree_unref (tree);
+	menu_filename = matemenu_tree_get_canonical_menu_path (tree);
+	g_object_unref (tree);
 	if (!menu_filename) {
 		matemenu_tree_item_unref (directory);
 		g_warning ("Cannot find the filename for the menu: no filename");
@@ -476,7 +482,7 @@ create_item_context_menu (GtkWidget   *item,
 	if (!entry)
 		return NULL;
 
-	directory = matemenu_tree_item_get_parent (MATEMENU_TREE_ITEM (entry));
+	directory = matemenu_tree_entry_get_parent (entry);
 	if (!directory)
 		return NULL;
 
@@ -485,8 +491,8 @@ create_item_context_menu (GtkWidget   *item,
 	if (!tree)
 		return NULL;
 
-	menu_filename = matemenu_tree_get_menu_file (tree);
-	matemenu_tree_unref (tree);
+	menu_filename = matemenu_tree_get_canonical_menu_path(tree);
+	g_object_unref (tree);
 	if (!menu_filename)
 		return NULL;
 
@@ -980,8 +986,8 @@ create_submenu_entry (GtkWidget          *menu,
 
 	setup_menuitem_with_icon (menuitem,
 				  panel_menu_icon_get_size (),
-				  NULL,
 				  matemenu_tree_directory_get_icon (directory),
+				  NULL,
 				  matemenu_tree_directory_get_name (directory));
 
 	gtk_menu_shell_append (GTK_MENU_SHELL (menu), menuitem);
@@ -1051,34 +1057,38 @@ create_menuitem (GtkWidget          *menu,
 				matemenu_tree_item_ref (entry),
 				(GDestroyNotify) matemenu_tree_item_unref);
 
-	if (alias_directory)
+	if (alias_directory) {
 		//FIXME: we should probably use this data when we do dnd or
 		//context menu for this menu item
 		g_object_set_data_full (G_OBJECT (menuitem),
 					"panel-menu-tree-alias-directory",
 					matemenu_tree_item_ref (alias_directory),
 					(GDestroyNotify) matemenu_tree_item_unref);
+		matemenu_tree_directory_get_icon (alias_directory);
+		if (matemenu_tree_directory_get_comment (alias_directory)) {
+			panel_util_set_tooltip_text (menuitem, matemenu_tree_directory_get_comment (alias_directory));
+		}
+	} else {
+		GDesktopAppInfo *ginfo;
+		const gchar* desc;
+		const gchar* gename;
 
-	setup_menuitem_with_icon (menuitem,
-				  panel_menu_icon_get_size (),
-				  NULL,
-				  alias_directory ? matemenu_tree_directory_get_icon (alias_directory) :
-						    matemenu_tree_entry_get_icon (entry),
-				  alias_directory ? matemenu_tree_directory_get_name (alias_directory) :
-						    matemenu_tree_entry_get_display_name (entry));
+		ginfo = matemenu_tree_entry_get_app_info (entry);
+		desc= g_app_info_get_description(G_APP_INFO(ginfo));
+		gename = g_desktop_app_info_get_generic_name(ginfo);
 
-	if (alias_directory &&
-	    matemenu_tree_directory_get_comment (alias_directory))
-		panel_util_set_tooltip_text (menuitem,
-					     matemenu_tree_directory_get_comment (alias_directory));
-	else if	(!alias_directory &&
-		 matemenu_tree_entry_get_comment (entry))
-		panel_util_set_tooltip_text (menuitem,
-					     matemenu_tree_entry_get_comment (entry));
-	else if	(!alias_directory &&
-		 matemenu_tree_entry_get_generic_name (entry))
-		panel_util_set_tooltip_text (menuitem,
-					     matemenu_tree_entry_get_generic_name (entry));
+		setup_menuitem_with_icon (menuitem,
+				panel_menu_icon_get_size (),
+				g_app_info_get_icon(G_APP_INFO(ginfo)),
+				NULL,
+				gename);
+
+		if (desc != NULL) {
+			panel_util_set_tooltip_text (menuitem, desc);
+		} else if ( gename != NULL) {
+			panel_util_set_tooltip_text (menuitem, gename);
+		}
+	}
 
 	g_signal_connect_after (menuitem, "button_press_event",
 				G_CALLBACK (menuitem_button_press_event), NULL);
@@ -1093,12 +1103,12 @@ create_menuitem (GtkWidget          *menu,
 				     menu_item_targets, 1,
 				     GDK_ACTION_COPY);
 
-		if (matemenu_tree_entry_get_icon (entry) != NULL) {
-			const char *icon;
+		GDesktopAppInfo *ginfo;
+	     	ginfo = matemenu_tree_entry_get_app_info (entry);
+		if (g_app_info_get_icon (G_APP_INFO(ginfo)) != NULL) {
 			GIcon      *gicon;
 
-			icon = matemenu_tree_entry_get_icon (entry);
-			gicon = panel_gicon_from_icon_name (icon);
+			gicon = g_app_info_get_icon (G_APP_INFO(ginfo));
 			if (gicon != NULL) {
 				gtk_drag_source_set_icon_gicon (menuitem, gicon);
 			}
@@ -1124,28 +1134,22 @@ static void
 create_menuitem_from_alias (GtkWidget      *menu,
 			    MateMenuTreeAlias *alias)
 {
-	MateMenuTreeItem *aliased_item;
-
-	aliased_item = matemenu_tree_alias_get_item (alias);
-
-	switch (matemenu_tree_item_get_type (aliased_item)) {
+	switch (matemenu_tree_alias_get_aliased_item_type (alias)) {
 	case MATEMENU_TREE_ITEM_DIRECTORY:
 		create_submenu (menu,
-				MATEMENU_TREE_DIRECTORY (aliased_item),
+				matemenu_tree_alias_get_directory (alias),
 				matemenu_tree_alias_get_directory (alias));
 		break;
 
 	case MATEMENU_TREE_ITEM_ENTRY:
 		create_menuitem (menu,
-				 MATEMENU_TREE_ENTRY (aliased_item),
+				 matemenu_tree_alias_get_directory (alias),
 				 matemenu_tree_alias_get_directory (alias));
 		break;
 
 	default:
 		break;
 	}
-
-	matemenu_tree_item_unref (aliased_item);
 }
 
 static void
@@ -1178,6 +1182,7 @@ handle_matemenu_tree_changed (MateMenuTree *tree,
 				remove_submenu_to_display_idle);
 }
 
+#if 0
 static void
 remove_matemenu_tree_monitor (GtkWidget *menu,
 			  MateMenuTree  *tree)
@@ -1186,6 +1191,7 @@ remove_matemenu_tree_monitor (GtkWidget *menu,
 				  (MateMenuTreeChangedFunc) handle_matemenu_tree_changed,
 				  menu);
 }
+#endif
 
 GtkWidget *
 create_applications_menu (const char *menu_file,
@@ -1203,13 +1209,18 @@ create_applications_menu (const char *menu_file,
 				   "panel-menu-force-icon-for-categories",
 				   GINT_TO_POINTER (TRUE));
 
+#if 1
+	tree = matemenu_tree_new (menu_file, MATEMENU_TREE_FLAGS_NONE | MATEMENU_TREE_FLAGS_SORT_DISPLAY_NAME);
+	matemenu_tree_load_sync (tree, NULL);
+#else
 	tree = matemenu_tree_lookup (menu_file, MATEMENU_TREE_FLAGS_NONE);
 	matemenu_tree_set_sort_key (tree, MATEMENU_TREE_SORT_DISPLAY_NAME);
+#endif
 
 	g_object_set_data_full (G_OBJECT (menu),
 				"panel-menu-tree",
-				matemenu_tree_ref (tree),
-				(GDestroyNotify) matemenu_tree_unref);
+				g_object_ref(tree),
+				(GDestroyNotify) g_object_unref);
 
 	g_object_set_data_full (G_OBJECT (menu),
 				"panel-menu-tree-path",
@@ -1235,13 +1246,15 @@ create_applications_menu (const char *menu_file,
 	g_signal_connect (menu, "button_press_event",
 			  G_CALLBACK (menu_dummy_button_press_event), NULL);
 
-	matemenu_tree_add_monitor (tree,
-			       (MateMenuTreeChangedFunc) handle_matemenu_tree_changed,
-			       menu);
-	g_signal_connect (menu, "destroy",
-			  G_CALLBACK (remove_matemenu_tree_monitor), tree);
+//	matemenu_tree_add_monitor (tree,
+//			       (MateMenuTreeChangedFunc) handle_matemenu_tree_changed,
+//			       menu);
+	g_signal_connect (tree, "changed", G_CALLBACK (handle_matemenu_tree_changed), menu);
 
-	matemenu_tree_unref (tree);
+//	g_signal_connect (menu, "destroy",
+//			  G_CALLBACK (remove_matemenu_tree_monitor), tree);
+
+	g_object_unref(tree);
 	
 /*HACK Fix any failures of compiz/other wm's to communicate with gtk for transparency */
 	GtkWidget *toplevel = gtk_widget_get_toplevel (menu);
@@ -1265,6 +1278,47 @@ populate_menu_from_directory (GtkWidget          *menu,
 	add_separator = (children != NULL);
 	g_list_free (children);
 
+#if 1
+	MateMenuTreeIter *iter;
+	iter = matemenu_tree_directory_iter (directory);
+	MateMenuTreeItemType type;
+	while ((type = matemenu_tree_iter_next (iter)) != MATEMENU_TREE_ITEM_INVALID) {
+		gpointer item;
+		if (add_separator || type == MATEMENU_TREE_ITEM_SEPARATOR) {
+			add_menu_separator (menu);
+			add_separator = FALSE;
+		}
+		switch (type) {
+		case MATEMENU_TREE_ITEM_DIRECTORY:
+			item = matemenu_tree_iter_get_directory(iter);
+			create_submenu (menu, item, NULL);
+			break;
+
+		case MATEMENU_TREE_ITEM_ENTRY:
+			item = matemenu_tree_iter_get_entry (iter);
+			create_menuitem (menu, item, NULL);
+			break;
+
+		case MATEMENU_TREE_ITEM_SEPARATOR :
+			/* already added */
+			break;
+
+		case MATEMENU_TREE_ITEM_ALIAS:
+			item = matemenu_tree_iter_get_alias(iter);
+			create_menuitem_from_alias (menu, item);
+			break;
+
+		case MATEMENU_TREE_ITEM_HEADER:
+			item = matemenu_tree_iter_get_header(iter);
+			create_header (menu, item);
+			break;
+
+		default:
+			break;
+		}
+		matemenu_tree_item_unref (item);
+	}
+#else
 	items = matemenu_tree_directory_get_contents (directory);
 
 	for (l = items; l; l = l->next) {
@@ -1305,6 +1359,7 @@ populate_menu_from_directory (GtkWidget          *menu,
 	}
 
 	g_slist_free (items);
+#endif
 
 	return menu;
 }

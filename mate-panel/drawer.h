@@ -31,7 +31,7 @@ void  panel_drawer_create                       (PanelToplevel    *toplevel,
 
 char *panel_drawer_create_with_id               (const char       *toplevel_id,
                                                  int               position,
-                                                 const char       *custom_icon,
+                                                 GIcon            *custom_icon,
                                                  gboolean          use_custom_icon,
                                                  const char       *tooltip);
 

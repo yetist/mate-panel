@@ -98,7 +98,7 @@ typedef struct {
 	PanelAddtoItemType     type;
 	char                  *name;
 	char                  *description;
-	char                  *icon;
+	GIcon                 *icon;
 	PanelActionButtonType  action_type;
 	char                  *launcher_path;
 	char                  *menu_filename;
@@ -547,13 +547,16 @@ panel_addto_prepend_entry (GSList         **parent_list,
 			   const char      *filename)
 {
 	PanelAddtoAppList *data;
+	GDesktopAppInfo    *ginfo;
+	
+	ginfo = matemenu_tree_entry_get_app_info (entry);
 
 	data = g_new0 (PanelAddtoAppList, 1);
 
 	data->item_info.type          = PANEL_ADDTO_LAUNCHER;
-	data->item_info.name          = g_strdup (matemenu_tree_entry_get_display_name (entry));
-	data->item_info.description   = g_strdup (matemenu_tree_entry_get_comment (entry));
-	data->item_info.icon          = g_strdup (matemenu_tree_entry_get_icon (entry));
+	data->item_info.name          = g_strdup (g_app_info_get_display_name(G_APP_INFO(ginfo)));
+	data->item_info.description   = g_strdup (g_app_info_get_description(G_APP_INFO(ginfo)));
+	data->item_info.icon          = g_app_info_get_icon(G_APP_INFO(ginfo));
 	data->item_info.launcher_path = g_strdup (matemenu_tree_entry_get_desktop_file_path (entry));
 	data->item_info.static_data   = FALSE;
 
@@ -565,28 +568,22 @@ panel_addto_prepend_alias (GSList         **parent_list,
 			   MateMenuTreeAlias  *alias,
 			   const char      *filename)
 {
-	MateMenuTreeItem *aliased_item;
-
-	aliased_item = matemenu_tree_alias_get_item (alias);
-
-	switch (matemenu_tree_item_get_type (aliased_item)) {
+	switch (matemenu_tree_alias_get_aliased_item_type (alias)) {
 	case MATEMENU_TREE_ITEM_DIRECTORY:
 		panel_addto_prepend_directory (parent_list,
-					       MATEMENU_TREE_DIRECTORY (aliased_item),
-					       filename);
+				matemenu_tree_alias_get_directory(alias),
+				filename);
 		break;
 
 	case MATEMENU_TREE_ITEM_ENTRY:
 		panel_addto_prepend_entry (parent_list,
-					   MATEMENU_TREE_ENTRY (aliased_item),
-					   filename);
+				matemenu_tree_alias_get_aliased_entry(alias),
+				filename);
 		break;
 
 	default:
 		break;
 	}
-
-	matemenu_tree_item_unref (aliased_item);
 }
 
 static void
@@ -594,6 +591,33 @@ panel_addto_make_application_list (GSList             **parent_list,
 				   MateMenuTreeDirectory  *directory,
 				   const char          *filename)
 {
+#if 1
+	MateMenuTreeIter *iter;
+	iter = matemenu_tree_directory_iter (directory);
+	MateMenuTreeItemType type;
+	while ((type = matemenu_tree_iter_next (iter)) != MATEMENU_TREE_ITEM_INVALID) {
+		gpointer item;
+		switch (type) {
+		case MATEMENU_TREE_ITEM_DIRECTORY:
+			item = matemenu_tree_iter_get_directory(iter);
+			panel_addto_prepend_directory (parent_list, item, filename);
+			break;
+
+		case MATEMENU_TREE_ITEM_ENTRY:
+			item = matemenu_tree_iter_get_entry (iter);
+			panel_addto_prepend_entry (parent_list, item, filename);
+			break;
+
+		case MATEMENU_TREE_ITEM_ALIAS:
+			item = matemenu_tree_iter_get_alias(iter);
+			panel_addto_prepend_alias (parent_list, item, filename);
+			break;
+		default:
+			break;
+		}
+		matemenu_tree_item_unref (item);
+	}
+#else
 	GSList *items;
 	GSList *l;
 
@@ -621,6 +645,7 @@ panel_addto_make_application_list (GSList             **parent_list,
 	}
 
 	g_slist_free (items);
+#endif
 
 	*parent_list = g_slist_reverse (*parent_list);
 }
@@ -668,8 +693,8 @@ static void panel_addto_make_application_model(PanelAddtoDialog* dialog)
 
 	store = gtk_tree_store_new(NUMBER_COLUMNS, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_POINTER, G_TYPE_STRING);
 
-	tree = matemenu_tree_lookup("mate-applications.menu", MATEMENU_TREE_FLAGS_NONE);
-	matemenu_tree_set_sort_key(tree, MATEMENU_TREE_SORT_DISPLAY_NAME);
+	tree = matemenu_tree_new ("mate-applications.menu", MATEMENU_TREE_FLAGS_NONE | MATEMENU_TREE_FLAGS_SORT_DISPLAY_NAME);
+	matemenu_tree_load_sync (tree, NULL);
 
 	if ((root = matemenu_tree_get_root_directory (tree)))
 	{
@@ -679,10 +704,10 @@ static void panel_addto_make_application_model(PanelAddtoDialog* dialog)
 		matemenu_tree_item_unref(root);
 	}
 
-	matemenu_tree_unref(tree);
+	g_object_unref(tree);
 
-	tree = matemenu_tree_lookup("mate-settings.menu", MATEMENU_TREE_FLAGS_NONE);
-	matemenu_tree_set_sort_key(tree, MATEMENU_TREE_SORT_DISPLAY_NAME);
+	tree = matemenu_tree_new ("mate-settings.menu", MATEMENU_TREE_FLAGS_NONE | MATEMENU_TREE_FLAGS_SORT_DISPLAY_NAME);
+	matemenu_tree_load_sync (tree, NULL);
 
 	if ((root = matemenu_tree_get_root_directory(tree)))
 	{
@@ -697,7 +722,7 @@ static void panel_addto_make_application_model(PanelAddtoDialog* dialog)
 		matemenu_tree_item_unref(root);
 	}
 
-	matemenu_tree_unref(tree);
+	g_object_unref(tree);
 
 	dialog->application_model = GTK_TREE_MODEL(store);
 	dialog->filter_application_model = gtk_tree_model_filter_new(GTK_TREE_MODEL(dialog->application_model), NULL);
@@ -971,7 +996,7 @@ panel_addto_dialog_free (PanelAddtoDialog *dialog)
 	dialog->application_model = NULL;
 
 	if (dialog->menu_tree)
-		matemenu_tree_unref (dialog->menu_tree);
+		g_object_unref(dialog->menu_tree);
 	dialog->menu_tree = NULL;
 
 	g_free (dialog);
