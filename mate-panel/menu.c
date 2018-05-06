@@ -1270,15 +1270,12 @@ populate_menu_from_directory (GtkWidget          *menu,
 			      MateMenuTreeDirectory *directory)
 {
 	GList    *children;
-	GSList   *l;
-	GSList   *items;
 	gboolean  add_separator;
 
 	children = gtk_container_get_children (GTK_CONTAINER (menu));
 	add_separator = (children != NULL);
 	g_list_free (children);
 
-#if 1
 	MateMenuTreeIter *iter;
 	iter = matemenu_tree_directory_iter (directory);
 	MateMenuTreeItemType type;
@@ -1292,11 +1289,13 @@ populate_menu_from_directory (GtkWidget          *menu,
 		case MATEMENU_TREE_ITEM_DIRECTORY:
 			item = matemenu_tree_iter_get_directory(iter);
 			create_submenu (menu, item, NULL);
+			matemenu_tree_item_unref (item);
 			break;
 
 		case MATEMENU_TREE_ITEM_ENTRY:
 			item = matemenu_tree_iter_get_entry (iter);
 			create_menuitem (menu, item, NULL);
+			matemenu_tree_item_unref (item);
 			break;
 
 		case MATEMENU_TREE_ITEM_SEPARATOR :
@@ -1306,60 +1305,19 @@ populate_menu_from_directory (GtkWidget          *menu,
 		case MATEMENU_TREE_ITEM_ALIAS:
 			item = matemenu_tree_iter_get_alias(iter);
 			create_menuitem_from_alias (menu, item);
+			matemenu_tree_item_unref (item);
 			break;
 
 		case MATEMENU_TREE_ITEM_HEADER:
 			item = matemenu_tree_iter_get_header(iter);
 			create_header (menu, item);
+			matemenu_tree_item_unref (item);
 			break;
 
 		default:
 			break;
 		}
-		matemenu_tree_item_unref (item);
 	}
-#else
-	items = matemenu_tree_directory_get_contents (directory);
-
-	for (l = items; l; l = l->next) {
-		MateMenuTreeItem *item = l->data;
-
-		if (add_separator ||
-		    matemenu_tree_item_get_type (item) == MATEMENU_TREE_ITEM_SEPARATOR) {
-			add_menu_separator (menu);
-			add_separator = FALSE;
-		}
-
-		switch (matemenu_tree_item_get_type (item)) {
-		case MATEMENU_TREE_ITEM_DIRECTORY:
-			create_submenu (menu, MATEMENU_TREE_DIRECTORY (item), NULL);
-			break;
-
-		case MATEMENU_TREE_ITEM_ENTRY:
-			create_menuitem (menu, MATEMENU_TREE_ENTRY (item), NULL);
-			break;
-
-		case MATEMENU_TREE_ITEM_SEPARATOR :
-			/* already added */
-			break;
-
-		case MATEMENU_TREE_ITEM_ALIAS:
-			create_menuitem_from_alias (menu, MATEMENU_TREE_ALIAS (item));
-			break;
-
-		case MATEMENU_TREE_ITEM_HEADER:
-			create_header (menu, MATEMENU_TREE_HEADER (item));
-			break;
-
-		default:
-			break;
-		}
-
-		matemenu_tree_item_unref (item);
-	}
-
-	g_slist_free (items);
-#endif
 
 	return menu;
 }
